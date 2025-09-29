@@ -4,20 +4,52 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from datetime import datetime
 import warnings
+import json
+import os
+from typing import Dict, List, Optional
 warnings.filterwarnings('ignore')
+
+# OpenAI integration
+try:
+    import openai
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+    print("⚠️ OpenAI library not installed. Install with: pip install openai")
 
 class D2CAnalytics:
     """
-    D2C eCommerce Analytics Pipeline for funnel insights, SEO opportunities, 
-    and AI-powered creative generation
+    Enhanced D2C eCommerce Analytics Pipeline with OpenAI-powered insights
+    for funnel optimization, SEO opportunities, and AI-generated creative content
     """
     
-    def __init__(self, excel_file_path: str):
+    def __init__(self, excel_file_path: str, openai_api_key: str = None):
         self.excel_file_path = excel_file_path
         self.raw_data = None
         self.processed_data = None
         self.funnel_metrics = None
         self.seo_insights = None
+        self.openai_client = None
+        
+        # Initialize OpenAI client
+        if openai_api_key and OPENAI_AVAILABLE:
+            try:
+                self.openai_client = OpenAI(api_key=openai_api_key)
+                print("✅ OpenAI integration enabled")
+            except Exception as e:
+                print(f"⚠️ OpenAI initialization failed: {e}")
+        elif not openai_api_key:
+            # Try to get from environment variable
+            api_key = os.getenv('OPENAI_API_KEY')
+            if api_key and OPENAI_AVAILABLE:
+                try:
+                    self.openai_client = OpenAI(api_key=api_key)
+                    print("✅ OpenAI integration enabled (from environment)")
+                except Exception as e:
+                    print(f"⚠️ OpenAI initialization failed: {e}")
+            else:
+                print("ℹ️ OpenAI API key not provided. AI insights will be template-based.")
         
     def load_d2c_data(self):
         """Load D2C eCommerce data from Excel file"""
@@ -337,8 +369,264 @@ class D2CAnalytics:
             print(f"\n📊 HIGH VOLUME, LOW PERFORMANCE CATEGORIES:")
             print(high_volume_low_perf[['category', 'total_search_volume', 'avg_position', 'traffic_potential']].round(2).head())
     
+    def generate_openai_insights(self, insight_type: str = "comprehensive", max_tokens: int = 1500):
+        """Generate advanced insights using OpenAI GPT models"""
+        if not self.openai_client:
+            print("⚠️ OpenAI client not available. Using template-based insights.")
+            return self.generate_ai_creative_content()
+        
+        print("🤖 Generating OpenAI-powered insights...")
+        
+        # Prepare data context for OpenAI
+        data_context = self._prepare_openai_context()
+        
+        insights = {}
+        
+        try:
+            if insight_type in ["comprehensive", "strategic"]:
+                insights['strategic_insights'] = self._generate_strategic_insights_openai(data_context, max_tokens)
+            
+            if insight_type in ["comprehensive", "creative"]:
+                insights['creative_content'] = self._generate_creative_content_openai(data_context, max_tokens)
+            
+            if insight_type in ["comprehensive", "recommendations"]:
+                insights['recommendations'] = self._generate_recommendations_openai(data_context, max_tokens)
+            
+            if insight_type in ["comprehensive", "market_analysis"]:
+                insights['market_analysis'] = self._generate_market_analysis_openai(data_context, max_tokens)
+            
+            print("✅ OpenAI insights generated successfully!")
+            return insights
+            
+        except Exception as e:
+            print(f"❌ Error generating OpenAI insights: {e}")
+            print("Falling back to template-based insights...")
+            return self.generate_ai_creative_content()
+    
+    def _prepare_openai_context(self):
+        """Prepare structured data context for OpenAI analysis"""
+        context = {
+            'dataset_summary': {
+                'total_rows': len(self.processed_data) if self.processed_data is not None else 0,
+                'columns': list(self.processed_data.columns) if self.processed_data is not None else [],
+            },
+            'funnel_performance': {},
+            'seo_insights': {}
+        }
+        
+        # Funnel metrics summary
+        if self.funnel_metrics is not None and not self.funnel_metrics.empty:
+            context['funnel_performance'] = {
+                'segments_analyzed': len(self.funnel_metrics),
+                'average_metrics': {
+                    'ctr': float(self.funnel_metrics['ctr'].mean()),
+                    'signup_rate': float(self.funnel_metrics['signup_rate'].mean()),
+                    'first_purchase_rate': float(self.funnel_metrics['first_purchase_rate'].mean()),
+                    'repeat_purchase_rate': float(self.funnel_metrics['repeat_purchase_rate'].mean()),
+                    'cac': float(self.funnel_metrics['cac'].mean()),
+                    'roas': float(self.funnel_metrics['roas'].mean()),
+                    'ltv_cac_ratio': float(self.funnel_metrics['ltv_cac_ratio'].mean())
+                },
+                'best_performer': {
+                    'segment': str(self.funnel_metrics.loc[self.funnel_metrics['roas'].idxmax(), 'group']),
+                    'roas': float(self.funnel_metrics['roas'].max()),
+                    'cac': float(self.funnel_metrics.loc[self.funnel_metrics['roas'].idxmax(), 'cac']),
+                    'ltv_cac_ratio': float(self.funnel_metrics.loc[self.funnel_metrics['roas'].idxmax(), 'ltv_cac_ratio'])
+                },
+                'worst_performer': {
+                    'segment': str(self.funnel_metrics.loc[self.funnel_metrics['roas'].idxmin(), 'group']),
+                    'roas': float(self.funnel_metrics['roas'].min()),
+                    'cac': float(self.funnel_metrics.loc[self.funnel_metrics['roas'].idxmin(), 'cac'])
+                }
+            }
+        
+        # SEO insights summary
+        if self.seo_insights is not None and not self.seo_insights.empty:
+            top_seo_opportunity = self.seo_insights.loc[self.seo_insights['seo_opportunity_score'].idxmax()]
+            context['seo_insights'] = {
+                'categories_analyzed': len(self.seo_insights),
+                'total_search_volume': int(self.seo_insights['total_search_volume'].sum()),
+                'average_position': float(self.seo_insights['avg_position'].mean()),
+                'total_traffic_potential': int(self.seo_insights['traffic_potential'].sum()),
+                'top_opportunity': {
+                    'category': str(top_seo_opportunity['category']),
+                    'opportunity_score': float(top_seo_opportunity['seo_opportunity_score']),
+                    'search_volume': int(top_seo_opportunity['total_search_volume']),
+                    'position': float(top_seo_opportunity['avg_position']),
+                    'traffic_potential': int(top_seo_opportunity['traffic_potential'])
+                }
+            }
+        
+        return context
+    
+    def _generate_strategic_insights_openai(self, context, max_tokens):
+        """Generate strategic insights using OpenAI"""
+        prompt = f"""
+        As a senior eCommerce strategist, analyze this D2C business performance data and provide strategic insights:
+
+        BUSINESS PERFORMANCE DATA:
+        {json.dumps(context, indent=2)}
+
+        Please provide:
+        1. Key performance insights and trends
+        2. Critical business challenges identified
+        3. Growth opportunities and market gaps
+        4. Strategic recommendations for improvement
+        5. Risk assessment and mitigation strategies
+
+        Focus on actionable, data-driven insights that can drive business growth.
+        """
+        
+        try:
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": "You are a senior eCommerce strategist with expertise in D2C business optimization, funnel analysis, and digital marketing."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=max_tokens,
+                temperature=0.7
+            )
+            
+            return response.choices[0].message.content
+            
+        except Exception as e:
+            print(f"Error generating strategic insights: {e}")
+            return "Strategic insights generation failed. Please check your OpenAI configuration."
+    
+    def _generate_creative_content_openai(self, context, max_tokens):
+        """Generate creative content using OpenAI"""
+        best_segment = context.get('funnel_performance', {}).get('best_performer', {})
+        top_seo = context.get('seo_insights', {}).get('top_opportunity', {})
+        
+        prompt = f"""
+        Create high-converting marketing content based on this performance data:
+
+        TOP PERFORMING SEGMENT: {best_segment.get('segment', 'N/A')}
+        - ROAS: {best_segment.get('roas', 0):.2f}x
+        - CAC: ${best_segment.get('cac', 0):.2f}
+        - LTV:CAC Ratio: {best_segment.get('ltv_cac_ratio', 0):.2f}
+
+        TOP SEO OPPORTUNITY: {top_seo.get('category', 'N/A')}
+        - Search Volume: {top_seo.get('search_volume', 0):,} monthly
+        - Current Position: {top_seo.get('position', 0):.1f}
+        - Traffic Potential: {top_seo.get('traffic_potential', 0):,}
+
+        Generate:
+        1. 5 high-converting ad headlines
+        2. 3 SEO-optimized meta descriptions (150-160 chars)
+        3. 2 compelling product descriptions with social proof
+        4. 3 email subject lines for retention campaigns
+        5. 2 landing page headlines with value propositions
+
+        Make content specific to the data and performance metrics provided.
+        """
+        
+        try:
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": "You are a conversion copywriter specializing in D2C eCommerce with expertise in data-driven content creation."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=max_tokens,
+                temperature=0.8
+            )
+            
+            return response.choices[0].message.content
+            
+        except Exception as e:
+            print(f"Error generating creative content: {e}")
+            return "Creative content generation failed. Please check your OpenAI configuration."
+    
+    def _generate_recommendations_openai(self, context, max_tokens):
+        """Generate optimization recommendations using OpenAI"""
+        avg_metrics = context.get('funnel_performance', {}).get('average_metrics', {})
+        
+        prompt = f"""
+        Based on this D2C eCommerce funnel analysis, provide specific optimization recommendations:
+
+        CURRENT PERFORMANCE METRICS:
+        - Average CTR: {avg_metrics.get('ctr', 0):.2f}%
+        - Signup Rate: {avg_metrics.get('signup_rate', 0):.2f}%
+        - First Purchase Rate: {avg_metrics.get('first_purchase_rate', 0):.2f}%
+        - Repeat Purchase Rate: {avg_metrics.get('repeat_purchase_rate', 0):.2f}%
+        - Average CAC: ${avg_metrics.get('cac', 0):.2f}
+        - Average ROAS: {avg_metrics.get('roas', 0):.2f}x
+        - LTV:CAC Ratio: {avg_metrics.get('ltv_cac_ratio', 0):.2f}
+
+        SEO ANALYSIS:
+        - Total Traffic Potential: {context.get('seo_insights', {}).get('total_traffic_potential', 0):,}
+        - Average Position: {context.get('seo_insights', {}).get('average_position', 0):.1f}
+
+        Provide prioritized recommendations for:
+        1. Funnel optimization (specific tactics for each stage)
+        2. Customer acquisition cost reduction
+        3. Retention and LTV improvement
+        4. SEO strategy and content optimization
+        5. Budget reallocation suggestions
+        6. Technology and tool recommendations
+
+        Include expected impact estimates and implementation timelines.
+        """
+        
+        try:
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": "You are a growth marketing expert specializing in D2C eCommerce optimization with deep expertise in conversion rate optimization, customer acquisition, and retention strategies."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=max_tokens,
+                temperature=0.6
+            )
+            
+            return response.choices[0].message.content
+            
+        except Exception as e:
+            print(f"Error generating recommendations: {e}")
+            return "Recommendations generation failed. Please check your OpenAI configuration."
+    
+    def _generate_market_analysis_openai(self, context, max_tokens):
+        """Generate market analysis using OpenAI"""
+        prompt = f"""
+        Conduct a comprehensive market analysis based on this D2C eCommerce data:
+
+        BUSINESS CONTEXT:
+        {json.dumps(context, indent=2)}
+
+        Provide analysis on:
+        1. Market positioning and competitive landscape insights
+        2. Customer behavior patterns and segment analysis
+        3. Industry benchmarking (compare to typical D2C metrics)
+        4. Market trends and opportunities
+        5. Seasonal patterns and cyclical behaviors
+        6. Customer lifetime value optimization opportunities
+        7. Market expansion recommendations
+        8. Pricing strategy insights
+
+        Focus on market-level insights that inform strategic decisions.
+        """
+        
+        try:
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": "You are a market research analyst specializing in D2C eCommerce markets with expertise in customer behavior analysis, competitive intelligence, and market trend identification."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=max_tokens,
+                temperature=0.7
+            )
+            
+            return response.choices[0].message.content
+            
+        except Exception as e:
+            print(f"Error generating market analysis: {e}")
+            return "Market analysis generation failed. Please check your OpenAI configuration."
+    
     def generate_ai_creative_content(self):
-        """Generate AI-powered creative outputs based on insights"""
+        """Generate AI-powered creative outputs based on insights (fallback method)"""
         print("=== AI-POWERED CREATIVE GENERATION ===")
         
         if self.funnel_metrics is None or self.seo_insights is None:
@@ -575,12 +863,23 @@ Order now and experience the difference that's made us the #1 choice for {catego
         plt.tight_layout()
         plt.show()
     
-    def export_d2c_report(self, filename: str = 'd2c_insights_report.json'):
-        """Export comprehensive D2C insights report"""
+    def export_enhanced_report(self, filename: str = 'd2c_enhanced_insights_report.json', include_openai: bool = True):
+        """Export comprehensive D2C insights report with OpenAI insights"""
+        
+        # Generate OpenAI insights if available
+        openai_insights = {}
+        if include_openai and self.openai_client:
+            try:
+                openai_insights = self.generate_openai_insights("comprehensive", max_tokens=2000)
+            except Exception as e:
+                print(f"Warning: Could not generate OpenAI insights: {e}")
+        
+        # Generate fallback creative content
         creative_content = self.generate_ai_creative_content()
         
         report = {
             'report_generated': datetime.now().isoformat(),
+            'openai_enabled': self.openai_client is not None,
             'funnel_analysis': {
                 'total_segments': len(self.funnel_metrics) if self.funnel_metrics is not None else 0,
                 'best_performing_segment': self._get_best_segment_info(),
@@ -594,15 +893,15 @@ Order now and experience the difference that's made us the #1 choice for {catego
                 'recommendations': self._get_seo_recommendations()
             },
             'creative_content': creative_content,
+            'openai_insights': openai_insights,
             'strategic_recommendations': self._get_strategic_recommendations()
         }
         
         # Export to JSON
-        import json
         with open(filename, 'w') as f:
             json.dump(report, f, indent=2, default=str)
         
-        print(f"📄 D2C insights report exported to: {filename}")
+        print(f"📄 Enhanced D2C insights report exported to: {filename}")
         return report
     
     def _get_best_segment_info(self):
@@ -754,15 +1053,15 @@ Order now and experience the difference that's made us the #1 choice for {catego
         
         return recommendations
 
-# Main execution function
-def run_d2c_analysis(excel_file_path: str):
+# Enhanced main execution function with OpenAI integration
+def run_enhanced_d2c_analysis(excel_file_path: str, openai_api_key: str = None):
     """
-    Complete D2C analysis workflow
+    Complete D2C analysis workflow with OpenAI-powered insights
     """
-    print("🚀 Starting D2C eCommerce Analysis Pipeline...")
+    print("🚀 Starting Enhanced D2C eCommerce Analysis Pipeline with AI Insights...")
     
-    # Initialize analyzer
-    analyzer = D2CAnalytics(excel_file_path)
+    # Initialize analyzer with OpenAI
+    analyzer = D2CAnalytics(excel_file_path, openai_api_key)
     
     # Load and preprocess data
     print("\n📊 Loading D2C dataset...")
@@ -780,359 +1079,71 @@ def run_d2c_analysis(excel_file_path: str):
     print("\n🔍 Analyzing SEO opportunities...")
     analyzer.analyze_seo_opportunities()
     
-    # Generate creative content
-    print("\n🎨 Generating AI-powered creative content...")
-    creative_outputs = analyzer.generate_ai_creative_content()
-    
-    # Display creative outputs
-    print("\n=== AI-GENERATED CREATIVE CONTENT ===")
-    
-    print("\n📢 AD HEADLINES:")
-    for i, headline in enumerate(creative_outputs.get('ad_headlines', []), 1):
-        print(f"{i}. {headline}")
-    
-    print("\n📝 SEO META DESCRIPTIONS:")
-    for meta in creative_outputs.get('meta_descriptions', []):
-        print(f"\nCategory: {meta['category']}")
-        print(f"Meta Description: {meta['meta_description']}")
-    
-    print("\n📦 PRODUCT DESCRIPTIONS:")
-    for prod in creative_outputs.get('product_descriptions', []):
-        print(f"\n--- {prod['category']} ---")
-        print(prod['product_description'])
+    # Generate AI-powered insights
+    print("\n🤖 Generating AI-powered insights...")
+    if analyzer.openai_client:
+        ai_insights = analyzer.generate_openai_insights("comprehensive", max_tokens=2000)
+        
+        print("\n=== AI-GENERATED STRATEGIC INSIGHTS ===")
+        if 'strategic_insights' in ai_insights:
+            print(ai_insights['strategic_insights'])
+        
+        print("\n=== AI-GENERATED CREATIVE CONTENT ===")
+        if 'creative_content' in ai_insights:
+            print(ai_insights['creative_content'])
+        
+        print("\n=== AI-GENERATED RECOMMENDATIONS ===")
+        if 'recommendations' in ai_insights:
+            print(ai_insights['recommendations'])
+            
+    else:
+        # Fallback to template-based creative content
+        print("\n🎨 Generating template-based creative content...")
+        creative_outputs = analyzer.generate_ai_creative_content()
+        
+        print("\n📢 AD HEADLINES:")
+        for i, headline in enumerate(creative_outputs.get('ad_headlines', []), 1):
+            print(f"{i}. {headline}")
+        
+        print("\n📝 SEO META DESCRIPTIONS:")
+        for meta in creative_outputs.get('meta_descriptions', []):
+            print(f"\nCategory: {meta['category']}")
+            print(f"Meta Description: {meta['meta_description']}")
+        
+        print("\n📦 PRODUCT DESCRIPTIONS:")
+        for prod in creative_outputs.get('product_descriptions', []):
+            print(f"\n--- {prod['category']} ---")
+            print(prod['product_description'])
     
     # Create dashboard
-    print("\n📊 Creating D2C dashboard...")
+    print("\n📊 Creating enhanced D2C dashboard...")
     analyzer.create_d2c_dashboard()
     
-    # Export report
-    print("\n📄 Exporting comprehensive report...")
-    report = analyzer.export_d2c_report()
+    # Export comprehensive report
+    print("\n📄 Exporting enhanced insights report...")
+    report = analyzer.export_enhanced_report(include_openai=True)
     
-    print("\n✅ D2C Analysis Complete!")
-    print("Check the generated dashboard, creative content, and JSON report for insights.")
+    print("\n✅ Enhanced D2C Analysis Complete!")
+    print("Check the generated dashboard, AI insights, and comprehensive JSON report.")
     
     return analyzer, report
 
-# Example usage:
+# Usage examples:
 """
-# Run D2C analysis
-analyzer, report = run_d2c_analysis('d2c_ecommerce_data.xlsx')
+# Run enhanced analysis with OpenAI
+analyzer, report = run_enhanced_d2c_analysis('d2c_data.xlsx', 'your-openai-api-key')
 
-# Access specific insights
-if analyzer.funnel_metrics is not None:
-    print("Top performing segment:", analyzer.funnel_metrics.loc[analyzer.funnel_metrics['roas'].idxmax(), 'group'])
+# Run with environment variable
+import os
+os.environ['OPENAI_API_KEY'] = 'your-openai-api-key'
+analyzer, report = run_enhanced_d2c_analysis('d2c_data.xlsx')
 
-if analyzer.seo_insights is not None:
-    print("Top SEO opportunity:", analyzer.seo_insights.loc[analyzer.seo_insights['seo_opportunity_score'].idxmax(), 'category'])
+# Generate specific insights
+if analyzer.openai_client:
+    strategic_insights = analyzer.generate_openai_insights('strategic', max_tokens=1000)
+    creative_content = analyzer.generate_openai_insights('creative', max_tokens=1500)
+    recommendations = analyzer.generate_openai_insights('recommendations', max_tokens=1200)
 """
 
-class IntegratedAnalyticsPipeline:
-    """
-    Integrated pipeline combining Mobile App Analytics with D2C eCommerce Analytics
-    """
-    
-    def __init__(self, rapidapi_key: str = None):
-        self.mobile_analyzer = None
-        self.d2c_analyzer = None
-        self.rapidapi_key = rapidapi_key
-        self.cross_platform_insights = {}
-    
-    def run_complete_pipeline(self, playstore_csv: str, d2c_excel: str, fetch_appstore: bool = False):
-        """Run complete analytics pipeline across mobile and D2C"""
-        print("🚀 INTEGRATED ANALYTICS PIPELINE STARTING...")
-        print("=" * 60)
-        
-        # Phase 1-4: Mobile App Analytics
-        print("\n📱 PHASE 1-4: MOBILE APP ANALYTICS")
-        print("-" * 40)
-        
-        from .unified_mobile_analytics import UnifiedMobileAnalytics
-        self.mobile_analyzer = UnifiedMobileAnalytics(self.rapidapi_key)
-        
-        # Load Play Store data
-        if self.mobile_analyzer.load_playstore_data(playstore_csv):
-            # Fetch App Store data if requested
-            if fetch_appstore and self.rapidapi_key:
-                self.mobile_analyzer.fetch_appstore_data()
-            
-            # Create unified dataset and run analyses
-            self.mobile_analyzer.create_unified_dataset()
-            self.mobile_analyzer.analyze_market_comparison()
-            self.mobile_analyzer.analyze_category_performance()
-            self.mobile_analyzer.identify_market_opportunities()
-            self.mobile_analyzer.create_comprehensive_dashboard()
-            mobile_report = self.mobile_analyzer.export_insights_report('mobile_insights_report.json')
-        
-        # Phase 5: D2C eCommerce Analytics
-        print("\n🛒 PHASE 5: D2C ECOMMERCE ANALYTICS")
-        print("-" * 40)
-        
-        self.d2c_analyzer = D2CAnalytics(d2c_excel)
-        d2c_analyzer, d2c_report = run_d2c_analysis(d2c_excel)
-        self.d2c_analyzer = d2c_analyzer
-        
-        # Cross-platform insights
-        print("\n🔄 GENERATING CROSS-PLATFORM INSIGHTS")
-        print("-" * 40)
-        self._generate_cross_platform_insights()
-        
-        # Final integrated report
-        print("\n📊 CREATING INTEGRATED REPORT")
-        print("-" * 40)
-        integrated_report = self._create_integrated_report(mobile_report, d2c_report)
-        
-        print("\n🎉 INTEGRATED ANALYSIS COMPLETE!")
-        print("=" * 60)
-        
-        return {
-            'mobile_analyzer': self.mobile_analyzer,
-            'd2c_analyzer': self.d2c_analyzer,
-            'integrated_report': integrated_report,
-            'cross_platform_insights': self.cross_platform_insights
-        }
-    
-    def _generate_cross_platform_insights(self):
-        """Generate insights that span both mobile and D2C platforms"""
-        
-        insights = {
-            'customer_journey_optimization': [],
-            'unified_marketing_strategy': [],
-            'technology_recommendations': [],
-            'budget_allocation_strategy': []
-        }
-        
-        # Customer Journey Optimization
-        if self.mobile_analyzer and self.mobile_analyzer.unified_data is not None:
-            mobile_categories = set(self.mobile_analyzer.unified_data['category'].unique())
-            
-            if self.d2c_analyzer and self.d2c_analyzer.processed_data is not None:
-                # Find category overlaps
-                category_col = self.d2c_analyzer._identify_category_column()
-                if category_col:
-                    d2c_categories = set(self.d2c_analyzer.processed_data[category_col].unique())
-                    overlap_categories = mobile_categories.intersection(d2c_categories)
-                    
-                    if overlap_categories:
-                        insights['customer_journey_optimization'].append({
-                            'insight': 'Mobile-to-D2C Journey Opportunity',
-                            'categories': list(overlap_categories),
-                            'recommendation': f"Create unified customer journeys for {len(overlap_categories)} overlapping categories. Use mobile apps for discovery and D2C for conversion optimization."
-                        })
-        
-        # Unified Marketing Strategy
-        if self.mobile_analyzer and self.d2c_analyzer:
-            if (hasattr(self.mobile_analyzer, 'unified_data') and 
-                hasattr(self.d2c_analyzer, 'funnel_metrics') and
-                self.d2c_analyzer.funnel_metrics is not None):
-                
-                # Compare conversion rates
-                mobile_engagement = "High" if self.mobile_analyzer.unified_data['review_count'].mean() > 1000 else "Medium"
-                d2c_conversion = "High" if self.d2c_analyzer.funnel_metrics['first_purchase_rate'].mean() > 5 else "Medium"
-                
-                insights['unified_marketing_strategy'].append({
-                    'mobile_engagement': mobile_engagement,
-                    'd2c_conversion_performance': d2c_conversion,
-                    'recommendation': self._get_unified_strategy_recommendation(mobile_engagement, d2c_conversion)
-                })
-        
-        # Technology Recommendations
-        insights['technology_recommendations'].extend([
-            {
-                'area': 'Attribution Modeling',
-                'recommendation': 'Implement cross-platform attribution to track user journeys from mobile discovery to D2C conversion'
-            },
-            {
-                'area': 'Customer Data Platform',
-                'recommendation': 'Unify mobile app analytics with D2C ecommerce data for 360-degree customer view'
-            },
-            {
-                'area': 'Marketing Automation',
-                'recommendation': 'Create automated workflows that trigger D2C campaigns based on mobile app behavior'
-            }
-        ])
-        
-        # Budget Allocation Strategy
-        if (self.mobile_analyzer and hasattr(self.mobile_analyzer, 'unified_data') and
-            self.d2c_analyzer and self.d2c_analyzer.funnel_metrics is not None):
-            
-            mobile_free_percentage = (self.mobile_analyzer.unified_data['type'] == 'Free').mean() * 100
-            d2c_avg_cac = self.d2c_analyzer.funnel_metrics['cac'].mean()
-            d2c_avg_roas = self.d2c_analyzer.funnel_metrics['roas'].mean()
-            
-            insights['budget_allocation_strategy'].append({
-                'mobile_monetization_model': f"{mobile_free_percentage:.1f}% free apps suggest freemium focus",
-                'd2c_efficiency': f"Average CAC: ${d2c_avg_cac:.2f}, ROAS: {d2c_avg_roas:.2f}x",
-                'recommendation': self._get_budget_allocation_recommendation(mobile_free_percentage, d2c_avg_roas)
-            })
-        
-        self.cross_platform_insights = insights
-        
-        # Print insights
-        print("🔍 Cross-Platform Insights Generated:")
-        for category, insight_list in insights.items():
-            if insight_list:
-                print(f"\n{category.replace('_', ' ').title()}:")
-                for insight in insight_list:
-                    if isinstance(insight, dict) and 'recommendation' in insight:
-                        print(f"  • {insight['recommendation']}")
-    
-    def _get_unified_strategy_recommendation(self, mobile_engagement, d2c_conversion):
-        """Get recommendation based on mobile engagement and D2C conversion performance"""
-        strategies = {
-            ('High', 'High'): "Leverage high mobile engagement to drive D2C conversions. Implement cross-platform retargeting and loyalty programs.",
-            ('High', 'Medium'): "Focus on optimizing D2C conversion funnel. Use mobile app users as a high-intent audience for D2C campaigns.",
-            ('Medium', 'High'): "Scale D2C success by improving mobile engagement. Create mobile-first content and app-exclusive offers.",
-            ('Medium', 'Medium'): "Implement comprehensive optimization across both channels. Focus on improving user experience and conversion paths."
-        }
-        
-        return strategies.get((mobile_engagement, d2c_conversion), "Develop integrated growth strategy focusing on customer lifecycle optimization.")
-    
-    def _get_budget_allocation_recommendation(self, mobile_free_percentage, d2c_roas):
-        """Get budget allocation recommendation"""
-        if mobile_free_percentage > 80 and d2c_roas > 3:
-            return "Allocate 60% budget to D2C (high ROAS), 40% to mobile (freemium acquisition). Focus on converting mobile users to D2C customers."
-        elif mobile_free_percentage > 80 and d2c_roas <= 3:
-            return "Balance investment: 50% mobile user acquisition, 50% D2C optimization. Improve D2C funnel before scaling."
-        elif mobile_free_percentage <= 80 and d2c_roas > 3:
-            return "Premium mobile strategy: 40% mobile premium acquisition, 60% D2C scaling. Leverage premium mobile users for D2C growth."
-        else:
-            return "Conservative approach: Equal budget split with focus on optimization over acquisition until performance improves."
-    
-    def _create_integrated_report(self, mobile_report, d2c_report):
-        """Create comprehensive integrated report"""
-        integrated_report = {
-            'executive_summary': self._create_executive_summary(mobile_report, d2c_report),
-            'mobile_insights': mobile_report,
-            'd2c_insights': d2c_report,
-            'cross_platform_opportunities': self.cross_platform_insights,
-            'integrated_recommendations': self._create_integrated_recommendations(),
-            'next_steps': self._create_action_plan()
-        }
-        
-        # Export integrated report
-        import json
-        with open('integrated_analytics_report.json', 'w') as f:
-            json.dump(integrated_report, f, indent=2, default=str)
-        
-        print("📄 Integrated report exported to: integrated_analytics_report.json")
-        
-        return integrated_report
-    
-    def _create_executive_summary(self, mobile_report, d2c_report):
-        """Create executive summary combining both analyses"""
-        summary = {
-            'report_date': datetime.now().isoformat(),
-            'key_metrics': {},
-            'top_opportunities': [],
-            'critical_actions': []
-        }
-        
-        # Key metrics
-        if mobile_report:
-            summary['key_metrics']['mobile_apps_analyzed'] = mobile_report.get('dataset_summary', {}).get('total_apps', 0)
-            summary['key_metrics']['mobile_avg_rating'] = mobile_report.get('market_insights', {}).get('avg_rating_overall', 0)
-        
-        if d2c_report:
-            summary['key_metrics']['d2c_segments_analyzed'] = d2c_report.get('funnel_analysis', {}).get('total_segments', 0)
-            summary['key_metrics']['d2c_avg_roas'] = d2c_report.get('funnel_analysis', {}).get('average_metrics', {}).get('avg_roas', 0)
-        
-        # Top opportunities
-        if mobile_report and mobile_report.get('top_opportunities'):
-            summary['top_opportunities'].extend([
-                f"Mobile: {opp['category']} category opportunity" 
-                for opp in mobile_report['top_opportunities'][:2]
-            ])
-        
-        if d2c_report and d2c_report.get('seo_analysis', {}).get('top_opportunities'):
-            summary['top_opportunities'].extend([
-                f"D2C SEO: {opp['category']} traffic potential" 
-                for opp in d2c_report['seo_analysis']['top_opportunities'][:2]
-            ])
-        
-        return summary
-    
-    def _create_integrated_recommendations(self):
-        """Create integrated recommendations spanning both platforms"""
-        return [
-            {
-                'priority': 'High',
-                'area': 'Customer Journey Integration',
-                'action': 'Implement unified customer tracking across mobile apps and D2C touchpoints',
-                'expected_impact': 'Improved attribution accuracy and customer lifetime value optimization'
-            },
-            {
-                'priority': 'High',
-                'area': 'Cross-Platform Retargeting',
-                'action': 'Create audiences from mobile app users for D2C campaigns and vice versa',
-                'expected_impact': 'Higher conversion rates and reduced acquisition costs'
-            },
-            {
-                'priority': 'Medium',
-                'area': 'Content Strategy Alignment',
-                'action': 'Align mobile app content with D2C SEO opportunities identified in analysis',
-                'expected_impact': 'Improved organic discovery and brand consistency'
-            },
-            {
-                'priority': 'Medium',
-                'area': 'Technology Stack Integration',
-                'action': 'Implement Customer Data Platform to unify mobile and D2C analytics',
-                'expected_impact': 'Enhanced personalization and better decision-making capabilities'
-            }
-        ]
-    
-    def _create_action_plan(self):
-        """Create 30-60-90 day action plan"""
-        return {
-            '30_days': [
-                'Set up cross-platform tracking and attribution',
-                'Create unified customer segments',
-                'Launch cross-platform retargeting campaigns'
-            ],
-            '60_days': [
-                'Implement customer data platform integration',
-                'Optimize top-performing campaigns identified in analysis',
-                'Launch content strategy alignment initiatives'
-            ],
-            '90_days': [
-                'Complete funnel optimization based on insights',
-                'Scale successful cross-platform strategies',
-                'Establish ongoing performance monitoring and optimization processes'
-            ]
-        }
-
-# Complete usage example
-def run_full_analytics_suite(playstore_csv: str, d2c_excel: str, rapidapi_key: str = None):
-    """
-    Run the complete analytics suite with all phases
-    """
-    print("🎯 COMPLETE ANALYTICS SUITE")
-    print("=" * 50)
-    
-    pipeline = IntegratedAnalyticsPipeline(rapidapi_key)
-    
-    results = pipeline.run_complete_pipeline(
-        playstore_csv=playstore_csv,
-        d2c_excel=d2c_excel,
-        fetch_appstore=bool(rapidapi_key)
-    )
-    
-    print("\n📋 SUMMARY OF DELIVERABLES:")
-    print("- Mobile app market analysis and dashboard")
-    print("- D2C funnel performance analysis")
-    print("- SEO opportunity identification")
-    print("- AI-generated creative content (headlines, descriptions, meta tags)")
-    print("- Cross-platform insights and recommendations")
-    print("- Integrated strategic roadmap")
-    print("- JSON reports for all analyses")
-    
-    return results
-
-# Final usage instructions
-print("🚀 COMPLETE ANALYTICS PIPELINE READY!")
-print("\nTo run the full analysis:")
-print("results = run_full_analytics_suite('googleplaystore.csv', 'd2c_data.xlsx', 'YOUR_RAPIDAPI_KEY')")
-print("\nTo run without App Store data:")
-print("results = run_full_analytics_suite('googleplaystore.csv', 'd2c_data.xlsx')")
-print("\nTo run only D2C analysis:")
-print("analyzer, report = run_d2c_analysis('d2c_data.xlsx')")
+print("🤖 Enhanced D2C Analytics with OpenAI Integration Ready!")
+print("Use run_enhanced_d2c_analysis() to start analysis with AI-powered insights.")
