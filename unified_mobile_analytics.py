@@ -10,14 +10,22 @@ from typing import Dict, List, Optional
 import warnings
 warnings.filterwarnings('ignore')
 
+# Optional OpenAI import - used if user provides an API key
+try:
+    import openai
+    _OPENAI_AVAILABLE = True
+except Exception:
+    _OPENAI_AVAILABLE = False
+
 class UnifiedMobileAnalytics:
     """
     Comprehensive mobile app analytics pipeline combining Google Play Store data
-    with Apple App Store API data
+    with Apple App Store API data and optional OpenAI-powered narrative insights.
     """
     
-    def __init__(self, rapidapi_key: str = None):
+    def __init__(self, rapidapi_key: str = None, openai_api_key: str = None):
         self.rapidapi_key = rapidapi_key
+        self.openai_api_key = openai_api_key
         self.playstore_data = None
         self.appstore_data = None
         self.unified_data = None
@@ -28,7 +36,16 @@ class UnifiedMobileAnalytics:
                 "X-RapidAPI-Key": rapidapi_key,
                 "X-RapidAPI-Host": "app-store-scraper1.p.rapidapi.com"
             }
-    
+        else:
+            self.headers = {}
+        
+        # OpenAI configuration
+        if openai_api_key:
+            if not _OPENAI_AVAILABLE:
+                print("Warning: openai package not available. Please install `openai` to use narrative insights.")
+            else:
+                openai.api_key = openai_api_key
+
     def load_playstore_data(self, file_path: str) -> bool:
         """Load and clean Google Play Store data"""
         try:
@@ -257,6 +274,7 @@ class UnifiedMobileAnalytics:
             print(top_categories)
         
         # Rating comparison
+        rating_by_platform = None
         if 'rating' in self.unified_data.columns:
             rating_by_platform = self.unified_data.groupby('platform')['rating'].agg(['mean', 'count']).round(3)
             print(f"\nRating Comparison:")
@@ -269,7 +287,7 @@ class UnifiedMobileAnalytics:
         
         return {
             'platform_distribution': platform_dist,
-            'rating_comparison': rating_by_platform if 'rating' in self.unified_data.columns else None,
+            'rating_comparison': rating_by_platform,
             'price_comparison': price_by_platform
         }
     
@@ -295,6 +313,7 @@ class UnifiedMobileAnalytics:
             'size_mb': 'mean'
         }).round(2)
         
+        # Normalize columns if any missing agg results
         category_metrics.columns = ['avg_rating', 'app_count', 'avg_reviews', 'median_reviews', 
                                   'avg_price', 'max_price', 'avg_size_mb']
         
@@ -336,8 +355,12 @@ class UnifiedMobileAnalytics:
         
         # Normalize scores
         for col in ['competition_score', 'engagement_score', 'quality_gap_score']:
-            category_analysis[col] = (category_analysis[col] - category_analysis[col].min()) / (
-                category_analysis[col].max() - category_analysis[col].min())
+            # handle constant columns
+            if category_analysis[col].max() - category_analysis[col].min() == 0:
+                category_analysis[col] = 0.0
+            else:
+                category_analysis[col] = (category_analysis[col] - category_analysis[col].min()) / (
+                    category_analysis[col].max() - category_analysis[col].min())
         
         # Calculate final opportunity score
         category_analysis['opportunity_score'] = (
@@ -408,6 +431,7 @@ class UnifiedMobileAnalytics:
         print(top_rated[['app_name', 'platform', 'category', 'rating', 'review_count']].head(10))
         
         # Most reviewed apps (engagement proxy)
+        most_reviewed = None
         if 'review_count' in self.unified_data.columns:
             most_reviewed = self.unified_data.nlargest(top_n, 'review_count')
             print(f"\nTop {top_n} Most Reviewed Apps:")
@@ -546,6 +570,104 @@ class UnifiedMobileAnalytics:
         plt.tight_layout()
         plt.show()
     
+    def generate_narrative_insights(self,
+                                    model: str = "gpt-4",
+                                    max_tokens: int = 512,
+                                    temperature: float = 0.2) -> Optional[str]:
+        """
+        Use OpenAI to generate narrative, human-readable insights from the analysis results.
+        Requires the openai package and a valid OpenAI API key passed to the class.
+        Returns generated text or None if not available.
+        """
+        if self.unified_data is None:
+            print("Please create unified dataset first!")
+            return None
+        
+        if not self.openai_api_key:
+            print("OpenAI API key not provided. Skipping narrative insights.")
+            return None
+        
+        if not _OPENAI_AVAILABLE:
+            print("OpenAI python package is not installed. Install with `pip install openai` to enable this feature.")
+            return None
+        
+        # Prepare condensed summaries to send to the model (keep within reasonable token limits)
+        try:
+            market = self.analyze_market_comparison()
+            categories = self.analyze_category_performance()
+            opportunities = self.identify_market_opportunities()
+            competitive = self.generate_competitive_insights(top_n=10)
+        except Exception as e:
+            print(f"Warning: error while computing sections for prompt: {e}")
+            market = {}
+            categories = pd.DataFrame()
+            opportunities = pd.DataFrame()
+            competitive = pd.DataFrame()
+        
+        # Build payload summaries
+        market_summary = {
+            'platform_distribution': market.get('platform_distribution', {}).to_dict() if market and market.get('platform_distribution') is not None else {},
+            'rating_comparison': market.get('rating_comparison', {}).to_dict() if market and market.get('rating_comparison') is not None else {},
+            'price_comparison': market.get('price_comparison', {}).to_dict() if market and market.get('price_comparison') is not None else {}
+        }
+        
+        # top categories sample
+        top_categories = self.unified_data['category'].value_counts().head(10).to_dict()
+        
+        # category performance top 8
+        cat_perf_sample = {}
+        if isinstance(categories, pd.DataFrame) and not categories.empty:
+            cat_perf_sample = categories.head(8).reset_index().to_dict(orient='records')
+        
+        # opportunities top 8
+        opp_sample = []
+        if isinstance(opportunities, pd.DataFrame) and not opportunities.empty:
+            opp_sample = opportunities.head(8).reset_index().reset_index(drop=True).to_dict(orient='records')
+        
+        # competitive sample
+        comp_sample = {}
+        try:
+            if isinstance(competitive, pd.DataFrame) and not competitive.empty:
+                comp_sample = {
+                    'top_high_performers_sample': competitive.head(5)[['app_name', 'platform', 'category', 'rating', 'review_count']].to_dict(orient='records')
+                }
+        except Exception:
+            comp_sample = {}
+        
+        prompt_sections = {
+            "market_summary": market_summary,
+            "top_categories": top_categories,
+            "category_performance_sample": cat_perf_sample,
+            "opportunities_sample": opp_sample,
+            "competitive_sample": comp_sample,
+            "notes": "All numeric values are approximations. Generate an executive summary (3-5 sentences), top 5 actionable opportunities with reasoning and suggested next steps, pricing recommendations, recommended KPIs to track, and potential risks or caveats."
+        }
+        
+        prompt = (
+            "You are an expert mobile app market analyst. "
+            "Based on the JSON data below, produce a concise, actionable report for a product/market team. "
+            "Include these sections: 1) Executive Summary (3-5 sentences), 2) Top 5 Opportunities (ranked), each with a recommended action, 3) Pricing recommendations, 4) Key KPIs to monitor, and 5) Risks / caveats.\n\n"
+            "JSON DATA:\n"
+            + json.dumps(prompt_sections, default=str, indent=2)
+        )
+        
+        # Call OpenAI ChatCompletion
+        try:
+            response = openai.ChatCompletion.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "You are a helpful and concise senior mobile market analyst."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            generated_text = response['choices'][0]['message']['content'].strip()
+            return generated_text
+        except Exception as e:
+            print(f"OpenAI API call failed: {e}")
+            return None
+    
     def export_insights_report(self, filename: str = 'mobile_app_insights_report.json'):
         """Export comprehensive insights as JSON report"""
         if self.unified_data is None:
@@ -558,6 +680,13 @@ class UnifiedMobileAnalytics:
         opportunities = self.identify_market_opportunities()
         competitive_insights = self.generate_competitive_insights()
         
+        # Optionally generate narrative insights using OpenAI
+        narrative = None
+        try:
+            narrative = self.generate_narrative_insights() if self.openai_api_key and _OPENAI_AVAILABLE else None
+        except Exception:
+            narrative = None
+        
         # Compile report
         report = {
             'report_generated': datetime.now().isoformat(),
@@ -569,17 +698,18 @@ class UnifiedMobileAnalytics:
                 'unique_developers': self.unified_data['developer'].nunique()
             },
             'market_insights': {
-                'platform_distribution': market_comparison['platform_distribution'].to_dict(),
+                'platform_distribution': market_comparison['platform_distribution'].to_dict() if market_comparison and market_comparison.get('platform_distribution') is not None else {},
                 'top_categories': self.unified_data['category'].value_counts().head(10).to_dict(),
-                'avg_rating_overall': float(self.unified_data['rating'].mean()),
+                'avg_rating_overall': float(self.unified_data['rating'].mean()) if 'rating' in self.unified_data.columns else None,
                 'free_vs_paid_ratio': self.unified_data['type'].value_counts().to_dict()
             },
-            'top_opportunities': opportunities.head(10).to_dict('records') if opportunities is not None else [],
+            'top_opportunities': opportunities.head(10).to_dict('records') if opportunities is not None and isinstance(opportunities, pd.DataFrame) else [],
             'success_patterns': {
-                'high_performer_categories': competitive_insights['category'].value_counts().head(5).to_dict(),
-                'avg_rating_high_performers': float(competitive_insights['rating'].mean()),
-                'avg_reviews_high_performers': float(competitive_insights['review_count'].mean())
+                'high_performer_categories': (competitive_insights['category'].value_counts().head(5).to_dict() if isinstance(competitive_insights, pd.DataFrame) and not competitive_insights.empty else {}),
+                'avg_rating_high_performers': float(competitive_insights['rating'].mean()) if isinstance(competitive_insights, pd.DataFrame) and not competitive_insights.empty else None,
+                'avg_reviews_high_performers': float(competitive_insights['review_count'].mean()) if isinstance(competitive_insights, pd.DataFrame) and not competitive_insights.empty else None
             },
+            'narrative_insights': narrative,
             'recommendations': self._generate_recommendations()
         }
         
@@ -608,7 +738,8 @@ class UnifiedMobileAnalytics:
                 })
             
             # Pricing recommendations
-            avg_paid_price = self.unified_data[self.unified_data['price_usd'] > 0]['price_usd'].mean()
+            paid_prices = self.unified_data[self.unified_data['price_usd'] > 0]['price_usd']
+            avg_paid_price = paid_prices.mean() if len(paid_prices) > 0 else 0.0
             recommendations.append({
                 'type': 'Pricing Strategy',
                 'recommendation': f'Average paid app price is ${avg_paid_price:.2f}. Consider competitive pricing in this range.',
@@ -616,7 +747,7 @@ class UnifiedMobileAnalytics:
             })
             
             # Quality recommendations
-            avg_rating = self.unified_data['rating'].mean()
+            avg_rating = self.unified_data['rating'].mean() if 'rating' in self.unified_data.columns else 0.0
             if avg_rating < 4.0:
                 recommendations.append({
                     'type': 'Quality Focus',
@@ -627,14 +758,14 @@ class UnifiedMobileAnalytics:
         return recommendations
 
 # Usage Example and Testing
-def run_comprehensive_analysis(csv_file_path: str, rapidapi_key: str = None):
+def run_comprehensive_analysis(csv_file_path: str, rapidapi_key: str = None, openai_api_key: str = None):
     """
-    Complete analysis workflow
+    Complete analysis workflow with optional OpenAI narrative generation.
     """
     print("🚀 Starting Comprehensive Mobile App Analysis...")
     
     # Initialize analyzer
-    analyzer = UnifiedMobileAnalytics(rapidapi_key)
+    analyzer = UnifiedMobileAnalytics(rapidapi_key, openai_api_key)
     
     # Step 1: Load Play Store data
     print("\n📱 Loading Google Play Store data...")
@@ -684,9 +815,11 @@ def run_comprehensive_analysis(csv_file_path: str, rapidapi_key: str = None):
 analyzer, report = run_comprehensive_analysis('googleplaystore.csv')
 
 # Run with both platforms (requires RapidAPI key)
-analyzer, report = run_comprehensive_analysis('googleplaystore.csv', 'YOUR_RAPIDAPI_KEY')
+analyzer, report = run_comprehensive_analysis('googleplaystore.csv', rapidapi_key='YOUR_RAPIDAPI_KEY')
+
+# Run with OpenAI narrative (requires openai package and API key)
+analyzer, report = run_comprehensive_analysis('googleplaystore.csv', openai_api_key='YOUR_OPENAI_KEY')
 """
 
 print("📱 Unified Mobile Analytics Pipeline Ready!")
 print("Use run_comprehensive_analysis() function to start the complete analysis workflow.")
-        
